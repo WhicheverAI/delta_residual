@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from loguru import logger
 
 # from utils import *
 from .matching_strategy import find_modules
@@ -37,8 +38,9 @@ from .matching_strategy import find_modules
 #         assert False
 #         return x
 class AbstractDeltaModule(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, reference_model: nn.Module = None) -> None:
         super().__init__()
+        self.refer_to(reference_model)
 
     def refer_to(self, model: nn.Module = None):
         """Simply let the DeltaModel `forward()` equals the reference model's `forward()`.
@@ -47,11 +49,24 @@ class AbstractDeltaModule(nn.Module):
         Args:
             model (nn.Module, optional): reference Pytorch model. Defaults to None. If None, the DeltaModel is set to be not callable.
         """
+        # 接口保留
+        # 注意，original_layer不是GeneralSoftPromptLayer的子模块，参数不应该被保存和加载，而是应该总是从外部传入。
+        # https://discuss.pytorch.org/t/unregister-prevent-from-registering-a-nn-module/134768
+        # self.reference_layer = (reference_layer, )
+        # self.forward = self.reference_layer[0].forward
         if model is None:
             self.forward = None
         else:
             self.forward = model.forward
         self.reference_model_tup = (model,)
+
+    @property
+    def reference_model(self):
+        return self.reference_model_tup[0]
+
+    @reference_model.setter
+    def reference_model(self, new_reference_model: nn.Module):
+        self.refer_to(new_reference_model)
 
     def hook_into(self, model: nn.Module):
         """Let the DeltaModel injects its computation into the reference model.
@@ -99,13 +114,64 @@ class AbstractDeltaLayer(AbstractDeltaModule):
     2. This class provides resource management of hooks and handles for the subclasses.
     """
 
+    def __init__(self, reference_layer: nn.Module = None) -> None:
+        super().__init__(
+            reference_model=reference_layer
+        )  # 这里会调用`refer_to`, 没有改变original_layer的行为。如果需要里面的性质才能推导出来layer要怎么初始化的话，可以用self.reference_model
+        # 对自身的forward进行hook
+        self.forward_pre_hook_handle = self.register_forward_pre_hook(
+            hook=self._forward_pre_hook
+        )  # 闭包，知晓这个类的信息的。
+        self.forward_hook_handle = self.register_forward_hook(
+            hook=self._forward_hook
+        )  # 闭包，知晓这个类的信息的。
+        # 去hook其他模型
+        self.others_forward_pre_hook_handles = dict()
+        self.others_forward_hook_handles = dict()
+
+    def __del__(self):
+        for layer in self.others_forward_pre_hook_handles.keys():
+            self.remove_hook_from(layer)
+
     def refer_to(self, model: nn.Module = None):
         """Simply let the DeltaModel `forward()` equals the reference model's `forward()`.
             Note: This shall not change the behavior of `model`.
         Args:
             model (nn.Module, optional): reference Pytorch model. Defaults to None. If None, the DeltaModel is set to be not callable.
         """
-        super().refer_to(model)
+        super().refer_to(
+            model
+        )  # Compared to AbstractDeltaModule, we just change the documentation here.
+
+    def hook_into(self, layer: nn.Module):
+        if self.others_forward_pre_hook_handles.get(layer) is not None:
+            logger.warning(
+                f"Layer {layer} has already been hooked. I will remove the old first and then replace it with the new."
+            )
+            self.remove_hook_from(layer)
+        self.others_forward_pre_hook_handles[layer] = layer.register_forward_pre_hook(
+            hook=self._forward_pre_hook
+        )
+        self.others_forward_hook_handles[layer] = layer.register_forward_hook(
+            hook=self._forward_hook
+        )
+
+    def remove_hook_from(self, layer: nn.Module):
+        if not self.others_forward_pre_hook_handles.get(layer):
+            logger.warning(
+                f"Layer {layer} has not been hooked. I will do nothing and return."
+            )
+            return
+        self.others_forward_pre_hook_handles[layer].remove()
+        self.others_forward_hook_handles[layer].remove()
+        del self.others_forward_pre_hook_handles[layer]
+        del self.others_forward_hook_handles[layer]
+
+    def _forward_pre_hook(self):
+        raise NotImplementedError("Shall be implemented by subclasses. ")
+
+    def _forward_hook(self):
+        raise NotImplementedError("Shall be implemented by subclasses. ")
 
 
 class GeneralDeltaModel(AbstractDeltaModule):
@@ -121,7 +187,7 @@ class GeneralDeltaModel(AbstractDeltaModule):
         layer_delta_class=nn.Module,
         layer_config: dict = None,
     ) -> None:
-        super().__init__()
+        super().__init__(reference_model)
         self.layer_delta_class = layer_delta_class
         self.layer_config = layer_config or dict()
         self.adapter_name = adapter_name
