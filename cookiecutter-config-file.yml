@@ -1,0 +1,13 @@
+# This file contains values from Cookiecutter
+
+default_context:
+  project_name: "delta_residual"
+  project_description: "A minimal PyTorch re-implementation of Parameter-Efficient Fine-Tuning (Delta Tuning)."
+  organization: "Handicraft-Computing-Team"
+  license: "Apache Software License 2.0"
+  minimal_python_version: 3.8
+  github_name: "Handicraft-Computing-Team"
+  email: "12011404@mail.sustech.edu.cn"
+  version: "0.1.0"
+  line_length: "88"
+  create_example_template: "cli"
