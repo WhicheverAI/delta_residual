@@ -8,6 +8,7 @@ from loguru import logger
 
 # from utils import *
 from .matching_strategy import find_modules
+from .utils import SeeTrainableParametersAddOn
 
 # 这个只修改Attention。 不考虑LayerNorm的话，prompt只对attention产生了影响
 # class GeneralSoftPromptAttentionLayer(nn.Module):
@@ -39,6 +40,9 @@ from .matching_strategy import find_modules
 #         # assert self.injected, "If not injected, you can't forward the model."
 #         assert False
 #         return x
+
+
+@SeeTrainableParametersAddOn
 class AbstractDeltaModule(nn.Module):
     def __init__(self, reference_model: nn.Module = None) -> None:
         super().__init__()

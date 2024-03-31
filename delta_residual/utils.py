@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-from delta_residual.general_delta import AbstractDeltaModule
+# from delta_residual.general_delta import AbstractDeltaModule
 
 
 def get_sorted_function_inputs_from_args(fun, *args, **kwargs) -> dict[str, Any]:
@@ -67,3 +67,76 @@ def auto_tuple_output_for_forward_hook(
             return new_outputs
 
     return wrapped_hook
+
+
+def set_requires_grad(model: nn.Module, requires_grad: bool = False) -> None:
+    for param in model.parameters():
+        param.requires_grad = requires_grad
+
+
+# TODO 实际上我们的mechanism不一样。我们的delta和model是完全分离的，仅仅使用hook的方式进行了微弱的连接。
+def SeeTrainableParametersAddOn(cls):
+    cls.get_nb_trainable_parameters = get_nb_trainable_parameters
+    cls.print_trainable_parameters = print_trainable_parameters
+    return cls
+
+
+# The following functions `get_nb_trainable_parameters` and `print_trainable_parameters` are borrowed from huggingface/peft.
+# Copyright 2023-present the HuggingFace Inc. team.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+def get_nb_trainable_parameters(self: nn.Module) -> tuple[int, int]:
+    r"""
+    Returns the number of trainable parameters and the number of all parameters in the model.
+    """
+
+    trainable_params = 0
+    all_param = 0
+    for _, param in self.named_parameters():
+        num_params = param.numel()
+        # if using DS Zero 3 and the weights are initialized empty
+        if num_params == 0 and hasattr(param, "ds_numel"):
+            num_params = param.ds_numel
+
+        # Due to the design of 4bit linear layers from bitsandbytes
+        # one needs to multiply the number of parameters by 2 to get
+        # the correct number of parameters
+        if param.__class__.__name__ == "Params4bit":
+            num_bytes = (
+                param.quant_storage.itemsize if hasattr(param, "quant_storage") else 1
+            )
+            num_params = num_params * 2 * num_bytes
+
+        all_param += num_params
+        if param.requires_grad:
+            trainable_params += num_params
+
+    return trainable_params, all_param
+
+
+def print_trainable_parameters(self: nn.Module) -> None:
+    """
+    Prints the number of trainable parameters in the model.
+
+    Note: print_trainable_parameters() uses get_nb_trainable_parameters() which is different from
+    num_parameters(only_trainable=True) from huggingface/transformers. get_nb_trainable_parameters() returns
+    (trainable parameters, all parameters) of the Peft Model which includes modified backbone transformer model.
+    For techniques like LoRA, the backbone transformer model is modified in place with LoRA modules. However, for
+    prompt tuning, the backbone transformer model is unmodified. num_parameters(only_trainable=True) returns number
+    of trainable parameters of the backbone transformer model which can be different.
+    """
+    trainable_params, all_param = self.get_nb_trainable_parameters()
+
+    print(
+        f"trainable params: {trainable_params:,d} || all params: {all_param:,d} || trainable%: {100 * trainable_params / all_param}"
+    )
