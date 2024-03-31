@@ -8,7 +8,7 @@ from loguru import logger
 
 # from utils import *
 from .matching_strategy import find_modules
-from .utils import SeeTrainableParametersAddOn
+from .utils import SeeTrainableParametersAddOn, set_requires_grad
 
 # 这个只修改Attention。 不考虑LayerNorm的话，prompt只对attention产生了影响
 # class GeneralSoftPromptAttentionLayer(nn.Module):
@@ -108,6 +108,18 @@ class AbstractDeltaModule(nn.Module):
             NotImplementedError: _description_
         """
         raise NotImplementedError
+
+    def prepare_for_training(self, model: nn.Module):
+        """Notice that `hook_into` is just changing the calling behavior of the model,
+        it is not freezing the optimizable parameters for training.
+        It is this function that is doing preparation for training.
+        Args:
+            model (nn.Module): _description_
+        """
+        self.refer_to(model)
+        self.hook_into(model)
+        set_requires_grad(model, False)
+        set_requires_grad(self, True)  # that's it, very simple.
 
 
 class AbstractDeltaLayer(AbstractDeltaModule):
@@ -221,6 +233,7 @@ class GeneralDeltaModel(AbstractDeltaModule):
             layer.hook_into(original)
 
     def remove_hook_from(self, model: nn.Module):
+        set_requires_grad(model, True)
         for name, layer in self.delta_layers.items():
             original = model.get_submodule(name.replace("==", "."))
             layer.remove_hook_from(original)
