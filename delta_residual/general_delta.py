@@ -1,3 +1,5 @@
+from typing import Any, Callable, List, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -106,6 +108,7 @@ class AbstractDeltaModule(nn.Module):
 
 class AbstractDeltaLayer(AbstractDeltaModule):
     """
+    One new layer to substitute another, don't change the original one's behavior unless specified.
     1. DeltaLayer is a more rigorous version of DeltaModel.
     DeltaLayer can compute `__call__()` with reference parameters and delta parameters by simply `refer_to` a reference model,
     without modifying the behavior of the reference model.
@@ -167,11 +170,15 @@ class AbstractDeltaLayer(AbstractDeltaModule):
         del self.others_forward_pre_hook_handles[layer]
         del self.others_forward_hook_handles[layer]
 
-    def _forward_pre_hook(self):
-        raise NotImplementedError("Shall be implemented by subclasses. ")
+    def _forward_pre_hook(self, module: nn.Module, inputs: tuple) -> tuple:
+        logger.warning("Shall be implemented by subclasses. ")
+        return inputs
 
-    def _forward_hook(self):
-        raise NotImplementedError("Shall be implemented by subclasses. ")
+    def _forward_hook(
+        self, module: nn.Module, inputs: tuple, outputs: tuple | torch.Tensor
+    ) -> tuple:
+        logger.warning("Shall be implemented by subclasses. ")
+        return outputs
 
 
 class GeneralDeltaModel(AbstractDeltaModule):

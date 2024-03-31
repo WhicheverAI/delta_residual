@@ -1,5 +1,12 @@
 import inspect
-from typing import Any
+from typing import Any, Callable, List, Tuple
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+
+from delta_residual.general_delta import AbstractDeltaModule
 
 
 def get_sorted_function_inputs_from_args(fun, *args, **kwargs) -> dict[str, Any]:
@@ -38,3 +45,25 @@ def get_sorted_function_inputs_from_args(fun, *args, **kwargs) -> dict[str, Any]
     if len(kwargs) > 0:
         raise TypeError("forward() got too many keyword arguments")
     return result
+
+
+def auto_tuple_output_for_forward_hook(
+    unwrapped_hook: Callable[[nn.Module, nn.Module, Tuple, Tuple], Tuple]
+) -> Callable[[nn.Module, nn.Module, Tuple, Tuple | torch.Tensor], Tuple]:
+    def wrapped_hook(
+        self, module: nn.Module, inputs: tuple, outputs: tuple | torch.Tensor
+    ) -> tuple:
+        # logger.warning(self)
+        not_tuple = False
+        if not isinstance(outputs, tuple):
+            not_tuple = True
+            outputs = (outputs,)
+
+        new_outputs = unwrapped_hook(self, module, inputs, outputs)
+
+        if not_tuple:
+            return new_outputs[0]
+        else:
+            return new_outputs
+
+    return wrapped_hook

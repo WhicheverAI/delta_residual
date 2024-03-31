@@ -5,12 +5,11 @@ import torch.nn.functional as F
 import torch.optim as optim
 from loguru import logger
 
-from .general_delta import AbstractDeltaLayer
+from .general_delta import AbstractDeltaLayer, AbstractDeltaModule
+from .utils import auto_tuple_output_for_forward_hook
 
 
 class GeneralSoftPromptLayer(AbstractDeltaLayer):
-    """One Layer to substitute another, don't change the original one's behavior unless specified."""
-
     def __init__(
         self,
         reference_layer: nn.Module,
@@ -47,14 +46,14 @@ class GeneralSoftPromptLayer(AbstractDeltaLayer):
         self.dim_of_hidden = dim_of_hidden
         self.dim_of_batches = dim_of_batches
 
-    def _forward_pre_hook(self, module: nn.Module, input: tuple) -> tuple:
+    def _forward_pre_hook(self, module: nn.Module, inputs: tuple) -> tuple:
         # 返回新的input
-        new_input = list(input)  # 因为元组不能Assignment
+        new_input = list(inputs)  # 因为元组不能Assignment
         for i in self.prepended_inputs:
             # selected_tensor = self.tensor_selector(input[i]) # 得到一个指针
             # selected_tensor = torch.cat([selected_tensor, self.prompts], dim=self.dim_of_tokens) # 并没有修改原来的tensor
             # self.tensor_selector(input[i]) = selected_tensor
-            selected_tensor: torch.Tensor = input[i]
+            selected_tensor: torch.Tensor = inputs[i]
             b = selected_tensor.shape[self.dim_of_batches]
             new_input[i] = torch.cat(
                 [
@@ -66,25 +65,20 @@ class GeneralSoftPromptLayer(AbstractDeltaLayer):
             )
         return tuple(new_input)
 
-    def _forward_hook(self, module: nn.Module, input: tuple, output: tuple) -> tuple:
+    @auto_tuple_output_for_forward_hook
+    def _forward_hook(self, module: nn.Module, inputs: tuple, outputs: tuple) -> tuple:
         # 返回新的output
-        not_tuple = False
-        if not isinstance(output, tuple):
-            not_tuple = True
-            output = (output,)
-        new_output = list(output)
+        new_outputs = list(outputs)
         for i in self.removed_outputs:
             # 我想要对 output[i]这个tensor进行操作,
-            selected_tensor: torch.Tensor = output[i]
+            selected_tensor: torch.Tensor = outputs[i]
             # 我要在 self.dim_of_tokens 这一个维度上，去掉最后添加的 self.soft_token_num 个元素
-            new_output[i] = selected_tensor.narrow(
+            new_outputs[i] = selected_tensor.narrow(
                 self.dim_of_tokens,
                 0,
                 selected_tensor.size(self.dim_of_tokens) - self.soft_token_num,
             )
-        if not_tuple:
-            return new_output[0]
-        return tuple(new_output)
+        return tuple(new_outputs)
 
     def instantiate(self, hidden_dim) -> None:
         """
