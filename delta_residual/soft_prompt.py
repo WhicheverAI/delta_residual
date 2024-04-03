@@ -8,6 +8,12 @@ from loguru import logger
 from .general_delta import AbstractDeltaLayer, AbstractDeltaModule
 from .utils import auto_tuple_output_for_forward_hook
 
+# 这个只修改Attention。 不考虑LayerNorm的话，prompt只对attention产生了影响
+# class GeneralSoftPromptAttentionLayer(nn.Module):
+
+# 这个对每一层做修改。
+# class GeneralSoftPromptForEncoderLayer(nn.Module):
+
 
 class GeneralSoftPromptLayer(AbstractDeltaLayer):
     def __init__(

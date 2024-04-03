@@ -74,6 +74,21 @@ def set_requires_grad(model: nn.Module, requires_grad: bool = False) -> None:
         param.requires_grad = requires_grad
 
 
+def get_module_device(model: nn.Module) -> torch.device:
+    return next(model.parameters()).device
+
+
+def get_tuple_device(t: Tuple) -> torch.device:
+    for item in t:
+        if isinstance(item, torch.Tensor):
+            return item.device
+    return None
+
+
+def ModuleDeviceAddOn(cls):
+    cls.device = property(lambda self: get_module_device(self))
+
+
 # TODO 实际上我们的mechanism不一样。我们的delta和model是完全分离的，仅仅使用hook的方式进行了微弱的连接。
 def SeeTrainableParametersAddOn(cls):
     cls.get_nb_trainable_parameters = get_nb_trainable_parameters

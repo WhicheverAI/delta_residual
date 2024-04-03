@@ -6,42 +6,19 @@ import torch.nn.functional as F
 import torch.optim as optim
 from loguru import logger
 
-# from utils import *
 from .matching_strategy import find_modules
-from .utils import SeeTrainableParametersAddOn, set_requires_grad
+from .utils import (
+    ModuleDeviceAddOn,
+    SeeTrainableParametersAddOn,
+    get_module_device,
+    get_tuple_device,
+    set_requires_grad,
+)
 
-# 这个只修改Attention。 不考虑LayerNorm的话，prompt只对attention产生了影响
-# class GeneralSoftPromptAttentionLayer(nn.Module):
-
-# 这个对每一层做修改。
-# class GeneralSoftPromptForEncoderLayer(nn.Module):
-
-
-# 实际上修改哪一层可以指定。
-# class DeltaModel(nn.Module):
-#     """Some Information about LayerReplacedModel"""
-#     def __init__(self, original_model:nn.Module):
-#         super().__init__()
-#         # self.original_model = (original_model, )
-#         # self.forward = self.original_model[0].forward # 没有改变original_layer的行为
-#         # self.hooked:bool = False
-#     # def hook_in(self):
-#     #     if self.injected:
-#     #         return
-#     #     self.injected = True
+# class ModificationReceipt(nn.Module):
 
 
-#     # def hook_out(self):
-#     #     if not self.injected:
-#     #         return
-#     #     self.injected = False
-
-#     def forward(self, x):
-#         # assert self.injected, "If not injected, you can't forward the model."
-#         assert False
-#         return x
-
-
+@ModuleDeviceAddOn
 @SeeTrainableParametersAddOn
 class AbstractDeltaModule(nn.Module):
     def __init__(self, reference_model: nn.Module = None) -> None:
@@ -163,6 +140,8 @@ class AbstractDeltaLayer(AbstractDeltaModule):
         )  # Compared to AbstractDeltaModule, we just change the documentation here.
 
     def hook_into(self, layer: nn.Module):
+        logger.debug(f"Try to hook delta:{self.device} into model:{layer.device}. ")
+
         if self.others_forward_pre_hook_handles.get(layer) is not None:
             logger.warning(
                 f"Layer {layer} has already been hooked. I will remove the old first and then replace it with the new."
@@ -176,6 +155,7 @@ class AbstractDeltaLayer(AbstractDeltaModule):
         )
 
     def remove_hook_from(self, layer: nn.Module):
+        logger.debug(f"Try to remove delta:{self.device} from model:{layer.device}. ")
         if not self.others_forward_pre_hook_handles.get(layer):
             logger.warning(
                 f"Layer {layer} has not been hooked. I will do nothing and return."
@@ -187,13 +167,19 @@ class AbstractDeltaLayer(AbstractDeltaModule):
         del self.others_forward_hook_handles[layer]
 
     def _forward_pre_hook(self, module: nn.Module, inputs: tuple) -> tuple:
-        logger.warning("Shall be implemented by subclasses. ")
+        # logger.warning("Shall be implemented by subclasses. ")
+        logger.debug(
+            f"delta:{self.device} is called in addition to model:{get_module_device(module)} with input:{get_tuple_device(inputs)}."
+        )
         return inputs
 
     def _forward_hook(
         self, module: nn.Module, inputs: tuple, outputs: tuple | torch.Tensor
     ) -> tuple:
-        logger.warning("Shall be implemented by subclasses. ")
+        logger.debug(
+            f"delta:{self.device} is called in addition to model:{get_module_device(module)} with input:{get_tuple_device(inputs)}."
+        )
+        # logger.warning("Shall be implemented by subclasses. ")
         return outputs
 
 
@@ -233,7 +219,7 @@ class GeneralDeltaModel(AbstractDeltaModule):
             layer.hook_into(original)
 
     def remove_hook_from(self, model: nn.Module):
-        set_requires_grad(model, True)
+        # set_requires_grad(model, True)
         for name, layer in self.delta_layers.items():
             original = model.get_submodule(name.replace("==", "."))
             layer.remove_hook_from(original)
@@ -242,3 +228,31 @@ class GeneralDeltaModel(AbstractDeltaModule):
         for name, layer in self.delta_layers.items():
             original = model.get_submodule(name.replace("==", "."))
             layer.merge_into(original)
+
+
+class ModelWithDelta(nn.Module):
+    def __init__(self, model: nn.Module, delta: AbstractDeltaModule):
+        super().__init__()
+        self.model = model
+        self.delta = delta
+        self.delta.refer_to(self.model)
+        self.delta.hook_into(self.model)
+        # self.delta.remove_hook_from(model)
+
+    def _replicate_for_data_parallel(self):
+        replica = super()._replicate_for_data_parallel()
+        #
+        # replica.model.linear._forward_hooks # 注意这个
+        logger.debug(replica.model.linear._forward_hooks)
+
+        # self.delta.remove_hook_from(replica.model)
+        # self.delta.refer_to(self.model)
+        # self.delta.hook_into(self.model)
+
+        # replica.delta.remove_hook_from(self.model)
+        # replica.delta.refer_to(replica.model)
+        # replica.delta.hook_into(replica.model)
+        return replica
+
+    def forward(self, *args, **kwargs):
+        return self.model(*args, **kwargs)
