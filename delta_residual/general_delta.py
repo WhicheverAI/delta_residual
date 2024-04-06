@@ -140,7 +140,9 @@ class AbstractDeltaLayer(AbstractDeltaModule):
         )  # Compared to AbstractDeltaModule, we just change the documentation here.
 
     def hook_into(self, layer: nn.Module):
-        logger.debug(f"Try to hook delta:{self.device} into model:{layer.device}. ")
+        logger.debug(
+            f"Try to hook delta:{self.device} into model:{get_module_device(layer)}. "
+        )
 
         if self.others_forward_pre_hook_handles.get(layer) is not None:
             logger.warning(
@@ -155,7 +157,9 @@ class AbstractDeltaLayer(AbstractDeltaModule):
         )
 
     def remove_hook_from(self, layer: nn.Module):
-        logger.debug(f"Try to remove delta:{self.device} from model:{layer.device}. ")
+        logger.debug(
+            f"Try to remove delta:{self.device} from model:{get_module_device(layer)}. "
+        )
         if not self.others_forward_pre_hook_handles.get(layer):
             logger.warning(
                 f"Layer {layer} has not been hooked. I will do nothing and return."
@@ -230,20 +234,51 @@ class GeneralDeltaModel(AbstractDeltaModule):
             layer.merge_into(original)
 
 
+@ModuleDeviceAddOn
 class ModelWithDelta(nn.Module):
     def __init__(self, model: nn.Module, delta: AbstractDeltaModule):
         super().__init__()
         self.model = model
+        # self.model.delta = delta
         self.delta = delta
         self.delta.refer_to(self.model)
         self.delta.hook_into(self.model)
         # self.delta.remove_hook_from(model)
 
     def _replicate_for_data_parallel(self):
+        logger.debug(
+            f"Replicating {self.__class__.__name__}:{self.device} for data parallel. "
+        )
+        # 首先，
+        # self.model.hook == self.delta
+        # self.delta.handle == remover(self.model.hook)
+
+        # replica = super()._replicate_for_data_parallel()
+        # 进行了操作之后，self的关系没有变化, 但是
+        # replica.model.hook == self.delta # 问题是这个无法被删除
+        # replica.delta.handle == remover(self.model.hook)
+        # 我们期望的操作是应该是
+        # replica.model.hook == replica.delta
+        # replica.delta.handle == remover(replica.model.hook)
+
+        # 我们直接重启
+        self.delta.remove_hook_from(self.model)
+
         replica = super()._replicate_for_data_parallel()
-        #
-        # replica.model.linear._forward_hooks # 注意这个
-        logger.debug(replica.model.linear._forward_hooks)
+        # ?这里self和replica是浅拷贝，里面的东西还是一样的，所以重启失败了
+        # 对象是新的同类对象
+        # _buffers _modules 都是浅拷贝
+        # __dict__是浅拷贝
+        # _parameters 是 新的 OrderedDict，所以没有新的参数产生！都是旧的玩意
+
+        replica.model = self.model._replicate_for_data_parallel()
+        replica.delta = self.delta._replicate_for_data_parallel()
+
+        assert id(self.delta) != id(replica.delta)
+        assert id(self.model) != id(replica.model)
+
+        self.delta.hook_into(self.model)  # 问题就在这里，仍然重复了。 replica的hooks和model的hooks是一样的。
+        replica.delta.hook_into(replica.model)  # replica并没有自己独立的hook字典。
 
         # self.delta.remove_hook_from(replica.model)
         # self.delta.refer_to(self.model)
@@ -255,4 +290,7 @@ class ModelWithDelta(nn.Module):
         return replica
 
     def forward(self, *args, **kwargs):
+        logger.debug(
+            f"Forwarding {self.__class__.__name__}:{self.device} with inputs:{get_tuple_device(*args)}. "
+        )
         return self.model(*args, **kwargs)

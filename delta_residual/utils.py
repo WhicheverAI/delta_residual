@@ -75,7 +75,10 @@ def set_requires_grad(model: nn.Module, requires_grad: bool = False) -> None:
 
 
 def get_module_device(model: nn.Module) -> torch.device:
-    return next(model.parameters()).device
+    try:
+        return next(model.parameters()).device
+    except StopIteration:
+        return None
 
 
 def get_tuple_device(t: Tuple) -> torch.device:
@@ -87,6 +90,7 @@ def get_tuple_device(t: Tuple) -> torch.device:
 
 def ModuleDeviceAddOn(cls):
     cls.device = property(lambda self: get_module_device(self))
+    return cls
 
 
 # TODO 实际上我们的mechanism不一样。我们的delta和model是完全分离的，仅仅使用hook的方式进行了微弱的连接。
