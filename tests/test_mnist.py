@@ -1,0 +1,146 @@
+"""Tests for Training ."""
+#%%
+import copy
+
+import pytest
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+
+#%%
+import torchvision.transforms as transforms
+from loguru import logger
+from torchvision import datasets, transforms
+from transformers import AutoModel, AutoModelForImageClassification
+
+# from datasets import load_dataset
+
+
+def train(model, device, train_loader, optimizer, epoch, log_interval=10):
+    model.train()
+    for batch_idx, (data, target) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+        output = model(data)
+        loss = F.nll_loss(output, target)
+        loss.backward()
+        optimizer.step()
+        if batch_idx % log_interval == 0:
+            logger.info(
+                "Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}".format(
+                    epoch,
+                    batch_idx * len(data),
+                    len(train_loader.dataset),
+                    100.0 * batch_idx / len(train_loader),
+                    loss.item(),
+                )
+            )
+
+
+def test(model, device, test_loader):
+    model.eval()
+    test_loss = 0
+    correct = 0
+    with torch.no_grad():
+        for data, target in test_loader:
+            data, target = data.to(device), target.to(device)
+            output = model(data)
+            test_loss += F.nll_loss(
+                output, target, reduction="sum"
+            ).item()  # sum up batch loss
+            pred = output.argmax(
+                dim=1, keepdim=True
+            )  # get the index of the max log-probability
+            correct += pred.eq(target.view_as(pred)).sum().item()
+
+    test_loss /= len(test_loader.dataset)
+
+    logger.info(
+        "\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n".format(
+            test_loss,
+            correct,
+            len(test_loader.dataset),
+            100.0 * correct / len(test_loader.dataset),
+        )
+    )
+
+
+from test_lora import TestLoraLayer
+
+#%%
+from delta_residual.general_delta import GeneralDeltaModel
+from delta_residual.parallel_adpater import LowRankAdapterLayer
+from delta_residual.utils import get_nb_trainable_parameters, set_requires_grad
+
+
+class TestLoraTraining(TestLoraLayer):
+    def test_training(self):
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.model = self.model.to(device)  # TODO 考虑不周了
+        # 我们库应该实现好的东西
+        self.make_delta()
+        self.delta = self.delta.to(device)
+        self.delta.prepare_for_training(self.model)
+        # 其他准备
+        # 参数
+        lr = 0.01
+        epochs = 10
+        momentum = 0.5
+        batch_size = 64
+        test_batch_size = 1000
+        # batch_size = 16 * 5
+        # test_batch_size = 16
+        #
+        class ForClassification(nn.Module):
+            def __init__(self, model: nn.Module, num_cls=10):
+                super().__init__()
+                self.model = model
+                # self.fc = None
+                self.num_cls = num_cls
+                self.fc = nn.Linear(768, self.num_cls)
+                # self.gray2rgb = transforms.Lambda(lambda x: x.repeat(3, 1, 1) if x.size(0)==1 else x)
+
+            def forward(self, x):
+                # logger.info(x.device)
+                # x = self.gray2rgb(x)
+                x = x.repeat(1, 3, 1, 1) if x.size(1) == 1 else x
+                x = self.model(x).last_hidden_state[:, 0, :]  # 不需要.squeeze()
+                # if self.fc is None:
+                #     batch_size, hidden_size = x.shape
+                #     self.fc = nn.Linear(hidden_size, self.num_cls).to(x.device)
+                x = self.fc(x)
+                x = F.log_softmax(x, dim=1)  # 对应nll_loss
+                return x
+
+        cls_model = ForClassification(self.delta).to(device)
+        # cls_model = nn.DataParallel(cls_model)
+        optimizer = optim.SGD(cls_model.parameters(), lr=lr, momentum=momentum)
+
+        train_loader = torch.utils.data.DataLoader(
+            datasets.MNIST(
+                "../data",
+                train=True,
+                download=True,
+                transform=transforms.Compose(
+                    [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+                ),
+            ),
+            batch_size=batch_size,
+            shuffle=True,
+        )
+        test_loader = torch.utils.data.DataLoader(
+            datasets.MNIST(
+                "../data",
+                train=False,
+                transform=transforms.Compose(
+                    [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+                ),
+            ),
+            batch_size=test_batch_size,
+            shuffle=True,
+        )
+
+        for epoch in range(1, epochs + 1):
+            train(cls_model, device, train_loader, optimizer, epoch)
+            test(cls_model, device, test_loader)
