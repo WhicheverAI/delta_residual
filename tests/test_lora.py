@@ -92,6 +92,7 @@ class TestLoraLayer:
         before_res = self.model(self.data)[0]
         logger.info(f"Before: {before_res.norm()}, {before_res.shape}")
         self.make_delta()
+        self.delta.hook_into(self.model)
         after_res = self.delta(self.data)[0]
         logger.info(f"After: {after_res.norm()}, {after_res.shape}")
         # assert not torch.isclose(before_res, after_res, atol=self.atol).all()

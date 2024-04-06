@@ -11,6 +11,7 @@ import torch.optim as optim
 #%%
 import torchvision.transforms as transforms
 from loguru import logger
+from torch.utils.data import Subset
 from torchvision import datasets, transforms
 from transformers import AutoModel, AutoModelForImageClassification
 
@@ -38,7 +39,7 @@ def train(model, device, train_loader, optimizer, epoch, log_interval=10):
             )
 
 
-def test(model, device, test_loader):
+def evaluate(model, device, test_loader):
     model.eval()
     test_loss = 0
     correct = 0
@@ -66,81 +67,103 @@ def test(model, device, test_loader):
     )
 
 
-from test_lora import TestLoraLayer
-
 #%%
 from delta_residual.general_delta import GeneralDeltaModel
 from delta_residual.parallel_adpater import LowRankAdapterLayer
 from delta_residual.utils import get_nb_trainable_parameters, set_requires_grad
 
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+name = "facebook/dinov2-base"
+model = AutoModel.from_pretrained(name)
+delta = GeneralDeltaModel(
+    model,
+    modified_modules=[
+        "attention.attention.query",
+        "attention.attention.value",
+    ],
+    layer_delta_class=LowRankAdapterLayer,
+    layer_config=dict(
+        r=8,
+        lora_alpha=16,
+        lora_dropout=0.0,
+    ),
+)
+delta.prepare_for_training(model)
+model = model.to(device)
+b, c, h, w = 1, 3, 224, 224
+data = torch.randn(b, c, h, w)
+model(data.to(device))
+#%%
+# 其他准备
+# 参数
+lr = 0.01
+# epochs = 10
+epochs = 1
+momentum = 0.5
+batch_size = 64
+test_batch_size = 1000
+# batch_size = 16 * 5
+# test_batch_size = 16
+#
+class ForClassification(nn.Module):
+    def __init__(self, model: nn.Module, num_cls=10):
+        super().__init__()
+        self.model = model
+        # self.fc = None
+        self.num_cls = num_cls
+        self.fc = nn.Linear(768, self.num_cls)
+        # self.gray2rgb = transforms.Lambda(lambda x: x.repeat(3, 1, 1) if x.size(0)==1 else x)
 
-class TestLoraTraining(TestLoraLayer):
-    def test_training(self):
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.model = self.model.to(device)  # TODO 考虑不周了
-        # 我们库应该实现好的东西
-        self.make_delta()
-        self.delta = self.delta.to(device)
-        self.delta.prepare_for_training(self.model)
-        # 其他准备
-        # 参数
-        lr = 0.01
-        epochs = 10
-        momentum = 0.5
-        batch_size = 64
-        test_batch_size = 1000
-        # batch_size = 16 * 5
-        # test_batch_size = 16
-        #
-        class ForClassification(nn.Module):
-            def __init__(self, model: nn.Module, num_cls=10):
-                super().__init__()
-                self.model = model
-                # self.fc = None
-                self.num_cls = num_cls
-                self.fc = nn.Linear(768, self.num_cls)
-                # self.gray2rgb = transforms.Lambda(lambda x: x.repeat(3, 1, 1) if x.size(0)==1 else x)
+    def forward(self, x):
+        # logger.info(x.device)
+        # x = self.gray2rgb(x)
+        x = x.repeat(1, 3, 1, 1) if x.size(1) == 1 else x
+        x = self.model(x).last_hidden_state[:, 0, :]  # 不需要.squeeze()
+        # if self.fc is None:
+        #     batch_size, hidden_size = x.shape
+        #     self.fc = nn.Linear(hidden_size, self.num_cls).to(x.device)
+        x = self.fc(x)
+        x = F.log_softmax(x, dim=1)  # 对应nll_loss
+        return x
 
-            def forward(self, x):
-                # logger.info(x.device)
-                # x = self.gray2rgb(x)
-                x = x.repeat(1, 3, 1, 1) if x.size(1) == 1 else x
-                x = self.model(x).last_hidden_state[:, 0, :]  # 不需要.squeeze()
-                # if self.fc is None:
-                #     batch_size, hidden_size = x.shape
-                #     self.fc = nn.Linear(hidden_size, self.num_cls).to(x.device)
-                x = self.fc(x)
-                x = F.log_softmax(x, dim=1)  # 对应nll_loss
-                return x
 
-        cls_model = ForClassification(self.delta).to(device)
-        # cls_model = nn.DataParallel(cls_model)
-        optimizer = optim.SGD(cls_model.parameters(), lr=lr, momentum=momentum)
+# cls_model = ForClassification(self.delta).to(device)
+cls_model = ForClassification(model).to(device)
+# cls_model = nn.DataParallel(cls_model)
+optimizer = optim.SGD(cls_model.parameters(), lr=lr, momentum=momentum)
 
-        train_loader = torch.utils.data.DataLoader(
-            datasets.MNIST(
-                "../data",
-                train=True,
-                download=True,
-                transform=transforms.Compose(
-                    [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
-                ),
+train_loader = torch.utils.data.DataLoader(
+    Subset(
+        datasets.MNIST(
+            "/home/yecm/yecanming/repo/cv/vpr/data",
+            train=True,
+            download=True,
+            transform=transforms.Compose(
+                [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
             ),
-            batch_size=batch_size,
-            shuffle=True,
-        )
-        test_loader = torch.utils.data.DataLoader(
-            datasets.MNIST(
-                "../data",
-                train=False,
-                transform=transforms.Compose(
-                    [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
-                ),
+        ),
+        range(100),
+    ),
+    batch_size=batch_size,
+    shuffle=True,
+)
+test_loader = torch.utils.data.DataLoader(
+    Subset(
+        datasets.MNIST(
+            "/home/yecm/yecanming/repo/cv/vpr/data",
+            train=False,
+            transform=transforms.Compose(
+                [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
             ),
-            batch_size=test_batch_size,
-            shuffle=True,
-        )
+        ),
+        range(100),
+    ),
+    batch_size=test_batch_size,
+    shuffle=True,
+)
+#%%
+for epoch in range(1, epochs + 1):
+    train(cls_model, device, train_loader, optimizer, epoch)
+    evaluate(cls_model, device, test_loader)
 
-        for epoch in range(1, epochs + 1):
-            train(cls_model, device, train_loader, optimizer, epoch)
-            test(cls_model, device, test_loader)
+# %%

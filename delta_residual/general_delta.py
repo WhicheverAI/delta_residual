@@ -8,8 +8,8 @@ from loguru import logger
 
 from .matching_strategy import find_modules
 from .utils import (
+    AutoDeviceModuleForSelfHook,
     ModuleDeviceAddOn,
-    ModuleForSelfHook,
     SeeTrainableParametersAddOn,
     get_module_device,
     get_tuple_device,
@@ -126,9 +126,9 @@ class AbstractDeltaLayer(AbstractDeltaModule):
         self.others_forward_pre_hook_handles = dict()
         self.others_forward_hook_handles = dict()
 
-    def __del__(self):
-        for layer in self.others_forward_pre_hook_handles.keys():
-            self.remove_hook_from(layer)
+    # def __del__(self):
+    #     for layer in self.others_forward_pre_hook_handles.keys():
+    #         self.remove_hook_from(layer)
 
     def refer_to(self, model: nn.Module = None):
         """Simply let the DeltaModel `forward()` equals the reference model's `forward()`.
@@ -151,10 +151,10 @@ class AbstractDeltaLayer(AbstractDeltaModule):
             )
             self.remove_hook_from(layer)
         self.others_forward_pre_hook_handles[layer] = layer.register_forward_pre_hook(
-            hook=ModuleForSelfHook(self, self.__class__._forward_pre_hook)
+            hook=AutoDeviceModuleForSelfHook(self, self.__class__._forward_pre_hook)
         )
         self.others_forward_hook_handles[layer] = layer.register_forward_hook(
-            hook=ModuleForSelfHook(self, self.__class__._forward_hook)
+            hook=AutoDeviceModuleForSelfHook(self, self.__class__._forward_hook)
         )
 
     def remove_hook_from(self, layer: nn.Module):
@@ -207,7 +207,7 @@ class GeneralDeltaModel(AbstractDeltaModule):
         self.adapter_name = adapter_name
         self.refer_to(reference_model)
         self.initiate(reference_model, modified_modules)
-        self.hook_into(reference_model)
+        # self.hook_into(reference_model)
 
     def initiate(self, reference_model: nn.Module, modified_modules: list[str]):
         self.delta_layers: nn.ModuleDict[str, AbstractDeltaModule] = nn.ModuleDict()

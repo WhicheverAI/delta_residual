@@ -53,6 +53,7 @@ class TestGeneralSoftPromptLayer:
             modified_modules=["attention.attention"],
             layer_delta_class=GeneralSoftPromptLayer,
         )
+        self.delta.hook_into(self.model)
         after_res = self.delta(self.data)[0]
         logger.info(f"After: {after_res.norm()}, {after_res.shape}")
         assert not torch.isclose(before_res, after_res, atol=self.atol).all()

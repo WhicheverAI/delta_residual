@@ -1,4 +1,6 @@
 import inspect
+import threading
+from functools import partial
 from typing import Any, Callable, List, Tuple
 
 import torch
@@ -7,10 +9,48 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 # from delta_residual.general_delta import AbstractDeltaModule
+from loguru import logger
+
+
+def get_module_device(model: nn.Module) -> torch.device:
+    try:
+        return next(model.parameters()).device
+    except StopIteration:
+        return None
+
+
+def get_tuple_device(t: Tuple) -> torch.device:
+    for item in t:
+        if isinstance(item, torch.Tensor):
+            return item.device
+    return None
+
+
+def ModuleDeviceAddOn(cls):
+    cls.device = property(lambda self: get_module_device(self))
+    return cls
 
 
 # 这里是一个partial
-@nn.DataParallel
+# @nn.DataParallel
+#  现在我是钩子函数，我会被来自不同device的东西tensor调用
+
+# class AutoDeviceModuleForSelfHook(nn.Module):
+#     """Some Information about ModuleForSelfHook"""
+
+#     def __init__(self, self_delta_model: nn.Module, hook_without_self: Callable):
+#         super().__init__()
+#         self.self_delta_model = self_delta_model
+#         self.hook_without_self = hook_without_self
+
+#     def forward(self, *args, **kwargs):
+#         return self.hook_without_self(self.self_delta_model, *args, **kwargs)
+# device = get_tuple_device(args)
+# if device is None:
+#     return self.hook_without_self(self.self_delta_model, *args, **kwargs)
+# return self.hook_without_self(self.self_delta_model.to(device), *args, **kwargs)
+
+
 class ModuleForSelfHook(nn.Module):
     """Some Information about ModuleForSelfHook"""
 
@@ -21,6 +61,46 @@ class ModuleForSelfHook(nn.Module):
 
     def forward(self, *args, **kwargs):
         return self.hook_without_self(self.self_delta_model, *args, **kwargs)
+
+
+@ModuleDeviceAddOn
+class AutoToDevice(nn.Module):
+    """Some Information about AutoToDevice"""
+
+    def __init__(self, original_module: nn.Module):
+        super(AutoToDevice, self).__init__()
+        self.original_module = original_module
+        self.lock = threading.Lock()  # 保证同时这个Module只在一个device
+
+    def forward(self, *args, **kwargs):
+        device = get_tuple_device(args)
+        if device is None:
+            return self.original_module.forward(*args, **kwargs)
+        with self.lock:
+            logger.info(
+                f"AutoToDevice: input is from {device}, my device is {self.device}. "
+            )
+            self.to(device)
+            result = self.original_module.forward(*args, **kwargs)
+        return result
+
+
+class AutoDeviceModuleForSelfHook(nn.Module):
+    """Some Information about AutoParallelModuleForSelfHook"""
+
+    def __init__(
+        self,
+        self_delta_model: nn.Module,
+        hook_without_self: Callable,
+        auto_to_device_cls=AutoToDevice,  # 也可能是 nn.DataParallel
+    ):
+        super(AutoDeviceModuleForSelfHook, self).__init__()
+        self.paralleled = auto_to_device_cls(
+            ModuleForSelfHook(self_delta_model, hook_without_self)
+        )
+
+    def forward(self, *args, **kwargs):
+        return self.paralleled(*args, **kwargs)
 
 
 def get_sorted_function_inputs_from_args(fun, *args, **kwargs) -> dict[str, Any]:
@@ -86,25 +166,6 @@ def auto_tuple_output_for_forward_hook(
 def set_requires_grad(model: nn.Module, requires_grad: bool = False) -> None:
     for param in model.parameters():
         param.requires_grad = requires_grad
-
-
-def get_module_device(model: nn.Module) -> torch.device:
-    try:
-        return next(model.parameters()).device
-    except StopIteration:
-        return None
-
-
-def get_tuple_device(t: Tuple) -> torch.device:
-    for item in t:
-        if isinstance(item, torch.Tensor):
-            return item.device
-    return None
-
-
-def ModuleDeviceAddOn(cls):
-    cls.device = property(lambda self: get_module_device(self))
-    return cls
 
 
 # TODO 实际上我们的mechanism不一样。我们的delta和model是完全分离的，仅仅使用hook的方式进行了微弱的连接。
