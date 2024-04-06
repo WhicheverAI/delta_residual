@@ -9,6 +9,7 @@ from loguru import logger
 from .matching_strategy import find_modules
 from .utils import (
     ModuleDeviceAddOn,
+    ModuleForSelfHook,
     SeeTrainableParametersAddOn,
     get_module_device,
     get_tuple_device,
@@ -150,10 +151,10 @@ class AbstractDeltaLayer(AbstractDeltaModule):
             )
             self.remove_hook_from(layer)
         self.others_forward_pre_hook_handles[layer] = layer.register_forward_pre_hook(
-            hook=self._forward_pre_hook
+            hook=ModuleForSelfHook(self, self.__class__._forward_pre_hook)
         )
         self.others_forward_hook_handles[layer] = layer.register_forward_hook(
-            hook=self._forward_hook
+            hook=ModuleForSelfHook(self, self.__class__._forward_hook)
         )
 
     def remove_hook_from(self, layer: nn.Module):

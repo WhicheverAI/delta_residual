@@ -9,6 +9,20 @@ import torch.optim as optim
 # from delta_residual.general_delta import AbstractDeltaModule
 
 
+# 这里是一个partial
+@nn.DataParallel
+class ModuleForSelfHook(nn.Module):
+    """Some Information about ModuleForSelfHook"""
+
+    def __init__(self, self_delta_model: nn.Module, hook_without_self: Callable):
+        super(ModuleForSelfHook, self).__init__()
+        self.self_delta_model = self_delta_model
+        self.hook_without_self = hook_without_self
+
+    def forward(self, *args, **kwargs):
+        return self.hook_without_self(self.self_delta_model, *args, **kwargs)
+
+
 def get_sorted_function_inputs_from_args(fun, *args, **kwargs) -> dict[str, Any]:
     args = list(args)
     # 将输入函数的参数正则化，变成按照函数调用顺序的、写出参数名称的字典调用
