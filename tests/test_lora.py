@@ -16,7 +16,7 @@ from delta_residual.parallel_adpater import LowRankAdapterLayer
 from delta_residual.utils import get_nb_trainable_parameters, set_requires_grad
 
 
-class TestGeneralSoftPromptLayer:
+class TestLoraLayer:
     def setup_class(self):
         name = "facebook/dinov2-base"
         self.model = AutoModel.from_pretrained(name)
