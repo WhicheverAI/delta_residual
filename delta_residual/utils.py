@@ -229,7 +229,7 @@ def print_trainable_parameters(self: nn.Module) -> None:
     prompt tuning, the backbone transformer model is unmodified. num_parameters(only_trainable=True) returns number
     of trainable parameters of the backbone transformer model which can be different.
     """
-    trainable_params, all_param = self.get_nb_trainable_parameters()
+    trainable_params, all_param = get_nb_trainable_parameters(self)
 
     print(
         f"trainable params: {trainable_params:,d} || all params: {all_param:,d} || trainable%: {100 * trainable_params / all_param}"
